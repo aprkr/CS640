@@ -1,0 +1,28 @@
+Q2: 
+Predictions:
+	Latency: 80.2 + 20.3 + 60.2 = 160.7 ms
+	Throughput: Sent: 20 Mbps, Receive: 18 Mbps
+Actual:
+	Latency: 161 ms
+	Throughput: Sent: 20.9 Mbps, Receive: 18.6 Mbps
+
+Latency is sum of latencies for L1, L2, and L3.
+Throughput is limited by slowest link, L1 in this case
+
+Q3:
+Predictions:
+	Two Pair:
+		Latency: 160 ms
+		Throughput: Sent: 10, Receive: 9
+	Three Pair:
+		Latency: 160 ms
+		Throughput: Sent: 7, Receive: 6
+Actual:
+	Two Pair:
+                Latency: 160 ms
+                Throughput: Sent: 20.4/12.0, Receive: 18.2/10.6
+        Three Pair:
+                Latency: 160 ms
+                Throughput: Sent: 19.7/9.3/6.3, Receive: 17.9/7.4/5.4
+
+Latency is unaffected as expected, the links are not changed. However, throughput changes unexpectedly, whatever link is established first tends to be the fasted, while the re
