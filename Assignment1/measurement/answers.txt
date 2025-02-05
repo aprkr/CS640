@@ -26,3 +26,20 @@ Actual:
                 Throughput: Sent: 19.7/9.3/6.3, Receive: 17.9/7.4/5.4
 
 Latency is unaffected as expected, the links are not changed. However, throughput changes unexpectedly, whatever link is established first tends to be the fasted, while the re
+
+Q4:
+Predictions:
+	h1-h4:
+		Latency: 160
+		Throughput: 20
+	h5-h6:
+		Latency: 40
+		Throughput: 27
+Actual:
+	h1-h4:
+		Latency: 160
+		Throughput: Sent: 18.1, Receive: 16.4
+	h5-h6:
+		Latency: 40
+		Throughput: Sent: 24.3, Receive: 21.6
+Latency unaffected as expected. However throughput seems to be as follows, sum of h1-h4 and h5-h6 bandwidths is 45. But, L2 is 40, so L2 bandwidth is split proportionally. 
