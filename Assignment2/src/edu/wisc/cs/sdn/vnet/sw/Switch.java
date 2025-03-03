@@ -32,6 +32,9 @@ public class Switch extends Device
 	 */
 	public void handlePacket(Ethernet etherPacket, Iface inIface)
 	{
+		if (debug && (etherPacket.getEtherType() == -31011)) {
+			return;
+		}
 		System.out.println("*** -> Received packet: " +
 				etherPacket.toString().replace("\n", "\n\t"));
 		

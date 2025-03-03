@@ -37,12 +37,18 @@ public class RouteTable
 	{
 		synchronized(this.entries)
 		{
-			/*****************************************************************/
-			/* TODO: Find the route entry with the longest prefix match	  */
-			
-			return null;
-			
-			/*****************************************************************/
+			RouteEntry best = null;
+			int bestMask = 0;
+			for (RouteEntry entry : this.entries) {
+				int mask = entry.getMaskAddress();
+				if ((ip & mask) == (entry.getDestinationAddress())) {
+					if (Integer.compareUnsigned(mask, bestMask) > 0) {
+						best = entry;
+						bestMask = mask;
+					}
+				}
+			}
+			return best;
 		}
 	}
 	
