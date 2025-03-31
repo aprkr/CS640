@@ -15,6 +15,7 @@ public class RIPv2Entry
 	protected int subnetMask;
 	protected int nextHopAddress;
 	protected int metric;
+    protected long timestamp;
 
     public RIPv2Entry()
     { }
@@ -25,6 +26,7 @@ public class RIPv2Entry
         this.address = address;
         this.subnetMask = subnetMask;
         this.metric = metric;
+        this.timestamp = System.currentTimeMillis();
     }
 
 	public String toString()
@@ -71,6 +73,15 @@ public class RIPv2Entry
 
     public void setMetric(int metric)
     { this.metric = metric; }
+
+    public long getTimeStamp() {
+        return this.timestamp;
+    }
+
+    public void updateTimeStamp() {
+        this.timestamp = System.currentTimeMillis();
+        return;
+    }
 
 	public byte[] serialize() 
     {

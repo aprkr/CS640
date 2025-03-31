@@ -10,6 +10,7 @@ import java.util.LinkedList;
 public class RIPv2 extends BasePacket 
 {
     public static final byte VERSION = 2;
+    public static final byte COMMAND_UNSOLICITED = 0;
     public static final byte COMMAND_REQUEST = 1;
     public static final byte COMMAND_RESPONSE = 2;
 

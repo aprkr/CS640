@@ -159,6 +159,13 @@ public class RouteTable
 			this.entries.add(entry);
 		}
 	}
+
+	public void insert(RouteEntry entry) {
+		synchronized(this.entries)
+		{ 
+			this.entries.add(entry);
+		}
+	}
 	
 	/**
 	 * Remove an entry from the route table.
