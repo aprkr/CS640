@@ -1,0 +1,38 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Current File",
+            "request": "launch",
+            "mainClass": "${file}"
+        },
+        {
+            "type": "java",
+            "name": "Main",
+            "request": "launch",
+            "mainClass": "edu.wisc.cs.sdn.vnet.Main",
+            "projectName": "project2 (2)"
+        },
+        {
+            "type": "java",
+            "name": "TCPend rec",
+            "request": "launch",
+            "mainClass": "TCPend",
+            "projectName": "project2 (4)",
+            "args": "-p 1234 -m 50 -c 1 f tcpreceive.txt"
+        },
+        {
+            "type": "java",
+            "name": "TCPend send",
+            "request": "launch",
+            "mainClass": "TCPend",
+            "projectName": "project2 (4)",
+            "args": "-p 4567 -s localhost -a 1234 f ../http_server/index.html -m 50 -c 1",
+            "cwd": "${workspaceFolder}/Assignment4/src"
+        }
+    ]
+}
