@@ -7,8 +7,12 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.TimeUnit;
+import java.lang.Math;
 
 public class TCPend {
     
@@ -26,6 +30,12 @@ public class TCPend {
 	private static long startTime = System.currentTimeMillis();
 	private static short segsInFlight = 0;
 	private static int TCPdataSize = 0;
+	private static double ERTT = 0.0;
+	private static double EDEV = 0.0;
+	static long timeout = 5000;
+	static Timer timer = new Timer();
+	static DatagramSocket socket;
+	static InetAddress netAddress;
 
     public static void main(String[] args) {
 
@@ -60,105 +70,154 @@ public class TCPend {
 		} else {
 			receiver();
 		}
+		timer.cancel();
+		timer.purge();
     }
 
 	static void sender() {
+		TCP[] segArray = new TCP[0];
 		try {
 			FileInputStream stream = new FileInputStream(file);
-			// byte fileBuf[] = new byte[mtu];
 			byte[] fileBuf = stream.readAllBytes();
+			int numSegs = 1 + (fileBuf.length / TCPdataSize);
+			segArray = new TCP[numSegs];
+			int curSeg = 0;
 			byte dataBuf[] = new byte[TCPdataSize];
-			
-			int dataBufLength = 0;
-			DatagramSocket socket = new DatagramSocket(myPort);
-			InetAddress netAddress = InetAddress.getByName(remoteIP);
+			int dataBufLength = TCPdataSize;
+			int start = 0;
+			while (curSeg < numSegs - 1) {
+				start = curSeg * TCPdataSize;
+				dataBuf = Arrays.copyOfRange(fileBuf, start, start + dataBufLength);
+				TCP tcp = new TCP(1 + (curSeg * TCPdataSize), 1, dataBuf, 0);
+				segArray[curSeg] = tcp;
+				curSeg++;
+			}
+			start = curSeg * TCPdataSize;
+			if (fileBuf.length % TCPdataSize != 0) {
+				dataBuf = Arrays.copyOfRange(fileBuf, start, start + (fileBuf.length % TCPdataSize));
+			} else {
+				dataBuf = Arrays.copyOfRange(fileBuf, start, start + dataBufLength);
+			}
+			TCP tcp = new TCP(1 + (curSeg * TCPdataSize), 1, dataBuf, 0);
+			segArray[curSeg] = tcp;
+			stream.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		try {
+			socket = new DatagramSocket(myPort);
+			netAddress = InetAddress.getByName(remoteIP);
 			byte[] datagramBytes = new byte[mtu];
 			DatagramPacket packet = new DatagramPacket(datagramBytes, mtu);
 			TCP tcp = new TCP( 0, 0, null,SYN);
-			int retransmits = 0;
+			// int retransmits = 0;
 			int sequence = 0;
-			int ack = 0;
-			int recAck = 0;
+			// int ack = 0;
+			// int recAck = 0;
 
 			// Create connection
 			socket.setSoTimeout(2000);
+
 			while (true) {
 				sendPacket(socket, netAddress, tcp);
 				try {
 					TCP synacktcp = receivePacket(socket, packet);
 					if ((synacktcp.getFlags() ^ (SYN | ACK)) == 0) {
-						retransmits = 0;
+						// retransmits = 0;
 						sequence = 1;
-						ack = 1;
+						// ack = 1;
 						break;
 					}
 				} catch (SocketTimeoutException e) {
-					retransmits++;
-					if (retransmits >= 15) {
-						System.err.println("Too many retransmits, quitting");
-						return;
-					}
+					// retransmits++;
+					// if (retransmits >= 15) {
+					// 	System.err.println("Too many retransmits, quitting");
+					// 	return;
+					// }
 				}
 			}
-			tcp = new TCP(sequence, ack, null, ACK);
-			recAck = 1;
+			tcp = new TCP(sequence, 1, null, ACK);
+			// recAck = 1;
 			sendPacket(socket, netAddress, tcp);
-			while (recAck < fileBuf.length - 1) { // Send file data
-				if (retransmits == 0) {
+			// int finalAck = segArray[segArray.length - 1].sequence;
+			socket.setSoTimeout(50);
+			int ackedSegs = 0;
+			while (ackedSegs < segArray.length) { // Send file data
+				// if (retransmits == 0) {
 					
-				} else if (retransmits >= 16) {
-					System.err.println("Too many retransmits, quitting");
-					return;
-				}
+				// } else if (retransmits >= 16) {
+				// 	System.err.println("Too many retransmits, quitting");
+				// 	return;
+				// }
 
-				while (segsInFlight < sws) {
+				while ((segsInFlight < sws) && (ackedSegs + segsInFlight < segArray.length)) {
 					// dataBuf = stream.readNBytes(mtu - TCP.HEADER_LENGTH);
 					// if (dataBuf.length < (mtu - TCP.HEADER_LENGTH)) {
 					// 	mtu = (short)(dataBuf.length + TCP.HEADER_LENGTH); // Dirty
 					// }
-					dataBufLength = (fileBuf.length - (sequence - 1));
-					if (dataBufLength < TCPdataSize) {
-					} else {
-						dataBufLength = TCPdataSize;
-					}
-					dataBuf = Arrays.copyOfRange(fileBuf, sequence - 1, dataBufLength + sequence - 1);
-					// System.arraycopy(fileBuf, sequence - 1, dataBuf, 0, dataBufLength);
-					tcp = new TCP(sequence, ack, dataBuf, 0);
-					sendPacket(socket, netAddress, tcp);
-					sequence += dataBufLength;
+					segArray[ackedSegs + segsInFlight].schedule();
+					// sendPacket(socket, netAddress, segArray[ackedSegs + segsInFlight]);
 					segsInFlight++;
 				}
 				
 
 				try { // Wait for ACK
-					socket.setSoTimeout(1100);
 					tcp = receivePacket(socket, packet);
-					int segsAcked = (TCPdataSize + tcp.getAcknowledge() - sequence) / TCPdataSize;
-					segsInFlight -= segsAcked;
-					recAck = tcp.getAcknowledge();
-					retransmits = 0;
+					int segsAcked = (tcp.getAcknowledge() - 1 - (ackedSegs * TCPdataSize)) / TCPdataSize;
+					if ((tcp.getAcknowledge() - 1) % TCPdataSize != 0) {
+						segsAcked++;
+					}
+					
+					if (segsAcked < 1) {
+						TCP ackedSeg = segArray[ackedSegs + segsAcked - 1];
+						if (ackedSeg.acked) {
+							System.out.println("Double ACK");
+							// if (ackedSeg.doubleAcked) {
+								TCP nextSeg = segArray[ackedSegs + segsAcked];
+								System.out.println("FastRetrans");
+								nextSeg.schedule();
+								segsInFlight--;
+							// } else {
+							// 	ackedSeg.doubleAcked = true;
+							// }
+						} else {
+							System.out.println("How did we get here?");
+						}
+					} else {
+						for (int i = ackedSegs; i < (ackedSegs + segsAcked); i++) {
+							segArray[i].acked = true;
+							segArray[i].transmits = 0;
+						}
+						ackedSegs += segsAcked;
+						segsInFlight -= segsAcked;
+					}
+					
+					
+
+					// recAck = tcp.getAcknowledge();
+					// retransmits = 0;
 				} catch (SocketTimeoutException e) { // If no ACK
-					System.out.println("No ACK");
-					retransmits++;
+					// System.out.println("No ACK");
+				// 	// retransmits++;
 				}
 
 			}
 
 			// Close connection
+			socket.setSoTimeout(1000);
 			while (true) {
-				tcp = new TCP(sequence, ack, null, FIN);
+				tcp = new TCP(sequence, 1, null, FIN);
 				sendPacket(socket, netAddress, tcp);
 				tcp = receivePacket(socket, packet);
 				if ((tcp.getFlags() ^ (FIN | ACK)) == 0) {
-					ack++;
-					tcp = new TCP(sequence, ack, null, ACK);
+					// ack++;
+					tcp = new TCP(sequence, 2, null, ACK);
 					sendPacket(socket, netAddress, tcp);
 					break;
 				}
 			}
 			
 
-			stream.close();
 			socket.close();
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -175,6 +234,7 @@ public class TCPend {
 			InetAddress netAddress = InetAddress.getByName("localhost");
 			int sequence = 0;
 			int ack = 0;
+			int debugCounter = 0;
 
 			// Wait for SYN
 			while ((tcp.getFlags() & SYN) == 0) {
@@ -203,13 +263,30 @@ public class TCPend {
 					break;
 				}
 				byte[] data = tcp.getData();
-				if (tcp.getSequence() <= ack + mtu) {
+				if (tcp.getSequence() == ack) {
+					
+					// if (ack == 67 && debugCounter == 0) {
+					// 	// ack -= data.length;
+					// 	debugCounter++;
+					// 	continue;
+					// } else {
+
+					// }
+					// if (ack == 133 && debugCounter > 0) {
+					// 	ack -= data.length;
+					// 	debugCounter++;
+					// 	if (debugCounter > 4) {
+					// 		ack += data.length;
+					// 	}
+					// }
 					outputStream.write(data);
 					ack += data.length;
 					tcp = new TCP(sequence, ack, null, ACK);
+					
 					sendPacket(socket, netAddress, tcp); // Send ACK
 				} else {
 					// Discarding out-of-order packet
+					System.out.println("OOO");
 					tcp = new TCP(sequence, ack, null, ACK);
 					sendPacket(socket, netAddress, tcp);
 				}
@@ -219,6 +296,7 @@ public class TCPend {
 			tcp = new TCP(sequence, ack, null, ACK | FIN);
 			sendPacket(socket, netAddress, tcp);
 			tcp = receivePacket(socket, recPacket);
+			socket.close();
 			outputStream.close();
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -231,12 +309,25 @@ public class TCPend {
 		TCP recTCP = new TCP(0, 0, null, 0);
 		recTCP.deserialize(tcpBytes);
 		printPacket(false, recTCP);
+		if (isSender && (recTCP.getFlags() & ACK) == ACK) {
+			if (recTCP.getSequence() == 0) {
+				ERTT = System.nanoTime() - recTCP.time;
+				EDEV = 0.0;
+				timeout = (long)(2.0 * ERTT / 1000000.0);
+			} else {
+				double SRTT = System.nanoTime() - recTCP.time;
+				double SDEV = Math.abs(SRTT - ERTT);
+				ERTT = 0.875 * ERTT + (1 - 0.875) * SRTT;
+				EDEV = 0.75 * EDEV + (1 - 0.75) * SDEV;
+				timeout = (long)(ERTT + 4 * EDEV);
+			}
+		}
 		return recTCP;
 		
 	}
 
-	static void sendPacket(DatagramSocket socket, InetAddress address, TCP tcp) throws Exception {
-		TimeUnit.SECONDS.sleep(1);
+	static void sendPacket(DatagramSocket socket, InetAddress address, TCP tcp) throws IOException, InterruptedException {
+		TimeUnit.MILLISECONDS.sleep(500);
 		byte[] serial = tcp.serialize();
 		DatagramPacket TCPpacket = new DatagramPacket(serial, serial.length, address, remotePort);
 		socket.send(TCPpacket);
@@ -274,6 +365,9 @@ class TCP {
 	short flags;
 	short checksum;
 	byte[] data;
+	boolean acked = false;
+	boolean doubleAcked = false;
+	int transmits = 0;
 
 	TCP(int sequence, int acknowledge, byte[] data, int flags) {
 		this.flags = (short)flags;
@@ -346,5 +440,34 @@ class TCP {
 		return serial;
 	}
 
+	transmitTask task = new transmitTask();
+
+	class transmitTask extends TimerTask {
+		public void run() {
+			if (!TCP.this.acked) {
+				TCP.this.transmits++;
+				if (TCP.this.transmits > 16) {
+					System.out.println("Too many retransmits, exiting");
+					System.exit(0);
+				} else if (TCP.this.transmits > 1) {
+					System.out.println("Timeout reached, retransmitting");
+				}
+				try {
+					TCPend.sendPacket(TCPend.socket, TCPend.netAddress, TCP.this);
+				} catch (IOException e) {
+					
+				} catch (InterruptedException e) {
 	
+				}
+				TCPend.timer.schedule(new transmitTask(), TCPend.timeout);
+			} else {
+				// this.cancel();
+			}
+		}
+	}
+
+	void schedule() {
+
+		task.run();
+	}
 }
