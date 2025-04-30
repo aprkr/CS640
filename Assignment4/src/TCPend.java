@@ -7,6 +7,7 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
 public class TCPend {
@@ -23,6 +24,8 @@ public class TCPend {
 	private static boolean isSender = false;
 	private static File file;
 	private static long startTime = System.currentTimeMillis();
+	private static short segsInFlight = 0;
+	private static int TCPdataSize = 0;
 
     public static void main(String[] args) {
 
@@ -50,6 +53,7 @@ public class TCPend {
 			}
 		}
 		file = new File(fileName);
+		TCPdataSize = mtu - TCP.HEADER_LENGTH;
 			
 		if (isSender) {
 			sender();
@@ -62,7 +66,10 @@ public class TCPend {
 		try {
 			FileInputStream stream = new FileInputStream(file);
 			// byte fileBuf[] = new byte[mtu];
-			byte fileBuf[] = null;
+			byte[] fileBuf = stream.readAllBytes();
+			byte dataBuf[] = new byte[TCPdataSize];
+			
+			int dataBufLength = 0;
 			DatagramSocket socket = new DatagramSocket(myPort);
 			InetAddress netAddress = InetAddress.getByName(remoteIP);
 			byte[] datagramBytes = new byte[mtu];
@@ -71,15 +78,20 @@ public class TCPend {
 			int retransmits = 0;
 			int sequence = 0;
 			int ack = 0;
+			int recAck = 0;
 
 			// Create connection
 			socket.setSoTimeout(2000);
-			while ((tcp.getFlags() ^ (SYN | ACK)) != 0) {
+			while (true) {
 				sendPacket(socket, netAddress, tcp);
 				try {
-					tcp = receivePacket(socket, packet);
-					retransmits = 0;
-					sequence = 1;
+					TCP synacktcp = receivePacket(socket, packet);
+					if ((synacktcp.getFlags() ^ (SYN | ACK)) == 0) {
+						retransmits = 0;
+						sequence = 1;
+						ack = 1;
+						break;
+					}
 				} catch (SocketTimeoutException e) {
 					retransmits++;
 					if (retransmits >= 15) {
@@ -88,33 +100,63 @@ public class TCPend {
 					}
 				}
 			}
-			tcp = new TCP(sequence, tcp.getSequence() + 1, null, ACK);
+			tcp = new TCP(sequence, ack, null, ACK);
+			recAck = 1;
 			sendPacket(socket, netAddress, tcp);
-			while (stream.available() > 0) { // Send file data
+			while (recAck < fileBuf.length - 1) { // Send file data
 				if (retransmits == 0) {
-					fileBuf = stream.readNBytes(mtu - TCP.HEADER_LENGTH);
-					if (fileBuf.length < (mtu - TCP.HEADER_LENGTH)) {
-						mtu = (short)(fileBuf.length + TCP.HEADER_LENGTH); // Dirty
-					}
+					
 				} else if (retransmits >= 16) {
 					System.err.println("Too many retransmits, quitting");
 					return;
 				}
-				// Prep TCP packet
-				tcp = new TCP(sequence, ack, fileBuf, 0);
-				sendPacket(socket, netAddress, tcp);
+
+				while (segsInFlight < sws) {
+					// dataBuf = stream.readNBytes(mtu - TCP.HEADER_LENGTH);
+					// if (dataBuf.length < (mtu - TCP.HEADER_LENGTH)) {
+					// 	mtu = (short)(dataBuf.length + TCP.HEADER_LENGTH); // Dirty
+					// }
+					dataBufLength = (fileBuf.length - (sequence - 1));
+					if (dataBufLength < TCPdataSize) {
+					} else {
+						dataBufLength = TCPdataSize;
+					}
+					dataBuf = Arrays.copyOfRange(fileBuf, sequence - 1, dataBufLength + sequence - 1);
+					// System.arraycopy(fileBuf, sequence - 1, dataBuf, 0, dataBufLength);
+					tcp = new TCP(sequence, ack, dataBuf, 0);
+					sendPacket(socket, netAddress, tcp);
+					sequence += dataBufLength;
+					segsInFlight++;
+				}
+				
 
 				try { // Wait for ACK
 					socket.setSoTimeout(1100);
 					tcp = receivePacket(socket, packet);
+					int segsAcked = (TCPdataSize + tcp.getAcknowledge() - sequence) / TCPdataSize;
+					segsInFlight -= segsAcked;
+					recAck = tcp.getAcknowledge();
 					retransmits = 0;
-					sequence += fileBuf.length;
 				} catch (SocketTimeoutException e) { // If no ACK
 					System.out.println("No ACK");
 					retransmits++;
 				}
 
 			}
+
+			// Close connection
+			while (true) {
+				tcp = new TCP(sequence, ack, null, FIN);
+				sendPacket(socket, netAddress, tcp);
+				tcp = receivePacket(socket, packet);
+				if ((tcp.getFlags() ^ (FIN | ACK)) == 0) {
+					ack++;
+					tcp = new TCP(sequence, ack, null, ACK);
+					sendPacket(socket, netAddress, tcp);
+					break;
+				}
+			}
+			
 
 			stream.close();
 			socket.close();
@@ -130,7 +172,7 @@ public class TCPend {
 			byte[] datagramBytes = new byte[mtu];
 			DatagramPacket recPacket = new DatagramPacket(datagramBytes, mtu);
 			DatagramSocket socket = new DatagramSocket(myPort);
-			InetAddress netAddress;
+			InetAddress netAddress = InetAddress.getByName("localhost");
 			int sequence = 0;
 			int ack = 0;
 
@@ -154,15 +196,29 @@ public class TCPend {
 				}
 			}
 			// Connection established, read data
-			while ((tcp.getFlags() & FIN) == 0) {
+			while (true) {
 				tcp = receivePacket(socket, recPacket);
+				if ((tcp.getFlags() ^ FIN) == 0) {
+					ack++;
+					break;
+				}
 				byte[] data = tcp.getData();
-				if (data != null) {
+				if (tcp.getSequence() <= ack + mtu) {
 					outputStream.write(data);
+					ack += data.length;
+					tcp = new TCP(sequence, ack, null, ACK);
+					sendPacket(socket, netAddress, tcp); // Send ACK
+				} else {
+					// Discarding out-of-order packet
+					tcp = new TCP(sequence, ack, null, ACK);
+					sendPacket(socket, netAddress, tcp);
 				}
 			}
 			// FIN
-			socket.close();
+			sequence++;
+			tcp = new TCP(sequence, ack, null, ACK | FIN);
+			sendPacket(socket, netAddress, tcp);
+			tcp = receivePacket(socket, recPacket);
 			outputStream.close();
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -271,7 +327,7 @@ class TCP {
 		this.flags = (short)(fourthInt & 0b111);
 		this.checksum = (short)(bb.getInt() & 0b1111);
 		this.data = new byte[this.length];
-		System.arraycopy(bytes, 0, this.data, 0, this.length);
+		System.arraycopy(bytes, HEADER_LENGTH, this.data, 0, this.length);
 	}
 
 	byte[] serialize() {
