@@ -172,14 +172,14 @@ public class TCPend {
 						TCP ackedSeg = segArray[ackedSegs + segsAcked - 1];
 						if (ackedSeg.acked) {
 							System.out.println("Double ACK");
-							// if (ackedSeg.doubleAcked) {
+							if (ackedSeg.doubleAcked) {
 								TCP nextSeg = segArray[ackedSegs + segsAcked];
 								System.out.println("FastRetrans");
 								nextSeg.schedule();
 								segsInFlight--;
-							// } else {
-							// 	ackedSeg.doubleAcked = true;
-							// }
+							} else {
+								ackedSeg.doubleAcked = true;
+							}
 						} else {
 							System.out.println("How did we get here?");
 						}
@@ -234,7 +234,6 @@ public class TCPend {
 			InetAddress netAddress = InetAddress.getByName("localhost");
 			int sequence = 0;
 			int ack = 0;
-			int debugCounter = 0;
 
 			// Wait for SYN
 			while ((tcp.getFlags() & SYN) == 0) {
@@ -263,33 +262,23 @@ public class TCPend {
 					break;
 				}
 				byte[] data = tcp.getData();
-				if (tcp.getSequence() == ack) {
-					
-					// if (ack == 67 && debugCounter == 0) {
-					// 	// ack -= data.length;
-					// 	debugCounter++;
-					// 	continue;
-					// } else {
-
-					// }
-					// if (ack == 133 && debugCounter > 0) {
-					// 	ack -= data.length;
-					// 	debugCounter++;
-					// 	if (debugCounter > 4) {
-					// 		ack += data.length;
-					// 	}
-					// }
-					outputStream.write(data);
-					ack += data.length;
-					tcp = new TCP(sequence, ack, null, ACK);
-					
-					sendPacket(socket, netAddress, tcp); // Send ACK
+				if (tcp.checksum == tcp.calulateCheckSum()) {
+					if (tcp.getSequence() == ack) {
+						outputStream.write(data);
+						ack += data.length;
+					} else {
+						// TODO Check if received ahead of time, can we buffer?
+						System.out.println("OOO");
+					}
 				} else {
-					// Discarding out-of-order packet
-					System.out.println("OOO");
-					tcp = new TCP(sequence, ack, null, ACK);
-					sendPacket(socket, netAddress, tcp);
+					System.out.println("Bad checksum");
+					tcp.calulateCheckSum();
 				}
+				long time = tcp.time;
+				tcp = new TCP(sequence, ack, null, ACK);
+				tcp.time = time;
+				
+				sendPacket(socket, netAddress, tcp); // Send ACK
 			}
 			// FIN
 			sequence++;
@@ -327,11 +316,12 @@ public class TCPend {
 	}
 
 	static void sendPacket(DatagramSocket socket, InetAddress address, TCP tcp) throws IOException, InterruptedException {
-		TimeUnit.MILLISECONDS.sleep(500);
+		tcp.time = System.nanoTime();
 		byte[] serial = tcp.serialize();
 		DatagramPacket TCPpacket = new DatagramPacket(serial, serial.length, address, remotePort);
 		socket.send(TCPpacket);
 		printPacket(true, tcp);
+		TimeUnit.MILLISECONDS.sleep(10);
 	}
 
 	static void printPacket(Boolean send, TCP tcp) {
@@ -363,7 +353,7 @@ class TCP {
 	long time;
 	int length;
 	short flags;
-	short checksum;
+	short checksum = 0;
 	byte[] data;
 	boolean acked = false;
 	boolean doubleAcked = false;
@@ -378,8 +368,30 @@ class TCP {
 			this.length = 0;
 		} else {
 			this.length = data.length;
+			this.checksum = calulateCheckSum();
 		}
-		this.time = System.nanoTime();
+	}
+
+	short calulateCheckSum() {
+		if (this.length == 0) {
+			return 0;
+		}
+		int temp = this.data[0] << 8 | this.data[1];
+		for (int i = 2; i < this.data.length - 1; i += 2) {
+			temp += (data[i] << 8 | data[i + 1]);
+			if ((temp & 0xFFFF0000) > 1) {
+				temp++;
+				temp &= 0xFFFF;
+			}
+		}
+		if (this.data.length % 2 == 1) {
+			temp += (this.data[this.data.length - 1] << 8);
+			if ((temp & 0xFFFF0000) > 1) {
+				temp++;
+				temp &= 0xFFFF;
+			}
+		}
+		return (short)(temp ^ 0xFFFF);
 	}
 
 	int getLength() {
@@ -419,7 +431,7 @@ class TCP {
 		int fourthInt = bb.getInt();
 		this.length = fourthInt >> 3;
 		this.flags = (short)(fourthInt & 0b111);
-		this.checksum = (short)(bb.getInt() & 0b1111);
+		this.checksum = (short)(bb.getInt() & 0xFFFF);
 		this.data = new byte[this.length];
 		System.arraycopy(bytes, HEADER_LENGTH, this.data, 0, this.length);
 	}
