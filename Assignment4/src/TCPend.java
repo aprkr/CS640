@@ -7,12 +7,10 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.TimeUnit;
-import java.lang.Math;
 
 public class TCPend {
     
@@ -36,6 +34,11 @@ public class TCPend {
 	static Timer timer = new Timer();
 	static DatagramSocket socket;
 	static InetAddress netAddress;
+	static int retransmissions = 0;
+	static int dupAcks = 0;
+	static int wrongChecksum = 0;
+	static int OOOSegs = 0;
+	static int packetsReceived = 0;
 
     public static void main(String[] args) {
 
@@ -61,6 +64,9 @@ public class TCPend {
 			} else if (arg.equals("-c")) {
 				sws = Short.parseShort(args[++i]);
 			}
+		}
+		if (mtu < 24) {
+			System.out.println("MTU must be at least 24");
 		}
 		file = new File(fileName);
 		TCPdataSize = mtu - TCP.HEADER_LENGTH;
@@ -104,19 +110,19 @@ public class TCPend {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
+		TCP tcp = new TCP( 0, 0, null,SYN);
 		try {
 			socket = new DatagramSocket(myPort);
 			netAddress = InetAddress.getByName(remoteIP);
 			byte[] datagramBytes = new byte[mtu];
 			DatagramPacket packet = new DatagramPacket(datagramBytes, mtu);
-			TCP tcp = new TCP( 0, 0, null,SYN);
-			// int retransmits = 0;
-			int sequence = 0;
+			tcp.time = System.nanoTime();
+			int retransmits = 0;
 			// int ack = 0;
 			// int recAck = 0;
 
 			// Create connection
-			socket.setSoTimeout(2000);
+			socket.setSoTimeout(500);
 
 			while (true) {
 				sendPacket(socket, netAddress, tcp);
@@ -124,23 +130,23 @@ public class TCPend {
 					TCP synacktcp = receivePacket(socket, packet);
 					if ((synacktcp.getFlags() ^ (SYN | ACK)) == 0) {
 						// retransmits = 0;
-						sequence = 1;
 						// ack = 1;
 						break;
 					}
 				} catch (SocketTimeoutException e) {
-					// retransmits++;
-					// if (retransmits >= 15) {
-					// 	System.err.println("Too many retransmits, quitting");
-					// 	return;
-					// }
+					tcp.time = System.nanoTime();
+					retransmits++;
+					if (retransmits >= 15) {
+						// System.err.println("Too many retransmits, quitting");
+						return;
+					}
 				}
 			}
-			tcp = new TCP(sequence, 1, null, ACK);
+			tcp = new TCP(1, 1, null, ACK);
 			// recAck = 1;
 			sendPacket(socket, netAddress, tcp);
 			// int finalAck = segArray[segArray.length - 1].sequence;
-			socket.setSoTimeout(50);
+			socket.setSoTimeout(20);
 			int ackedSegs = 0;
 			while (ackedSegs < segArray.length) { // Send file data
 				// if (retransmits == 0) {
@@ -169,22 +175,33 @@ public class TCPend {
 					}
 					
 					if (segsAcked < 1) {
-						TCP ackedSeg = segArray[ackedSegs + segsAcked - 1];
+						dupAcks++;
+						TCP ackedSeg;
+						if (ackedSegs + segsAcked < 1) {
+							ackedSeg = segArray[0];
+						} else {
+							ackedSeg = segArray[ackedSegs + segsAcked - 1];
+						}
 						if (ackedSeg.acked) {
-							System.out.println("Double ACK");
+							dupAcks++;
+							// System.out.println("Double ACK");
 							if (ackedSeg.doubleAcked) {
 								TCP nextSeg = segArray[ackedSegs + segsAcked];
-								System.out.println("FastRetrans");
+								// System.out.println("FastRetrans");
 								nextSeg.schedule();
-								segsInFlight--;
+								// segsInFlight--;
 							} else {
 								ackedSeg.doubleAcked = true;
 							}
 						} else {
-							System.out.println("How did we get here?");
+							// System.out.println("How did we get here?");
 						}
 					} else {
+						if (segsAcked > 1) {
+							// System.out.println("Cum ACK");
+						}
 						for (int i = ackedSegs; i < (ackedSegs + segsAcked); i++) {
+							segArray[i].task.cancel();
 							segArray[i].acked = true;
 							segArray[i].transmits = 0;
 						}
@@ -204,24 +221,32 @@ public class TCPend {
 			}
 
 			// Close connection
-			socket.setSoTimeout(1000);
+			int seq = tcp.getAcknowledge();
+			tcp = new TCP(seq, 1, null, FIN);
+			tcp.schedule();
 			while (true) {
-				tcp = new TCP(sequence, 1, null, FIN);
-				sendPacket(socket, netAddress, tcp);
-				tcp = receivePacket(socket, packet);
+				try {
+					tcp = receivePacket(socket, packet);
+				} catch (SocketTimeoutException e) {
+				}
+				
 				if ((tcp.getFlags() ^ (FIN | ACK)) == 0) {
-					// ack++;
-					tcp = new TCP(sequence, 2, null, ACK);
+					tcp = new TCP(seq + 1, 2, null, ACK);
 					sendPacket(socket, netAddress, tcp);
 					break;
 				}
 			}
-			
 
 			socket.close();
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
+		System.out.println("Bytes sent: " + (tcp.getSequence() - 2));
+		System.out.println("Packets sent: " + segArray.length);
+		System.out.println("Retransmissions: " + retransmissions);
+		// System.out.println("Out of order packets discarded: " + OOOSegs);
+		// System.out.println("Incorrect checksum packets: " + wrongChecksum);
+		// System.out.println("Duplicate Acks: " + dupAcks);
 	}
 
 	static void receiver() {
@@ -234,59 +259,162 @@ public class TCPend {
 			InetAddress netAddress = InetAddress.getByName("localhost");
 			int sequence = 0;
 			int ack = 0;
+			int debugCounter = 0;
 
 			// Wait for SYN
-			while ((tcp.getFlags() & SYN) == 0) {
+			while (true) {
 				socket.receive(recPacket);
 				netAddress = recPacket.getAddress();
 				remotePort = (short)recPacket.getPort();
 				byte[] tcpBytes = recPacket.getData();
 				tcp.deserialize(tcpBytes);
 				printPacket(false, tcp);
-				if ((tcp.getFlags() & SYN) != 0) {
-					ack = tcp.getSequence() + 1;
+				if ((tcp.getFlags() ^ SYN) == 0) {
+					// System.out.println("Syn got");
+					socket.setSoTimeout(5000);
+					ack = 1;
+					long time = tcp.time;
 					tcp = new TCP(0, ack, null, SYN | ACK);
+					tcp.time = time;
 					sendPacket(socket, netAddress, tcp);
-					tcp = receivePacket(socket, recPacket);
-					if ((tcp.getFlags() & ACK) != 0) {
-						sequence = 1;
+					while (true) {
+						try {
+							tcp = receivePacket(socket, recPacket);
+							if ((tcp.getFlags() ^ SYN) == 0) {
+								// System.out.println("Got another SYN");
+								time = tcp.time;
+								tcp = new TCP(0, ack, null, SYN | ACK);
+								tcp.time = time;
+								sendPacket(socket, netAddress, tcp);
+								continue;
+							}
+							sequence = 1;
+							break;
+						} catch (SocketTimeoutException e) {
+							sendPacket(socket, netAddress, tcp);
+						}
+					}
+					if (sequence == 1) {
 						break;
 					}
 				}
 			}
 			// Connection established, read data
+			TCP[] outOfOrderSegs = new TCP[sws - 1];
+			int numOutOfOrderSegs = 0;
+			boolean skipFirst = false;
+			if ((tcp.getFlags() ^ ACK) != 0) {
+				// System.out.println("Ack missed");
+				skipFirst = true;
+			}
 			while (true) {
-				tcp = receivePacket(socket, recPacket);
+				if (!skipFirst) {
+					tcp = receivePacket(socket, recPacket);
+				} else {
+					skipFirst = false;
+				}
 				if ((tcp.getFlags() ^ FIN) == 0) {
 					ack++;
 					break;
 				}
+				// if (debugCounter++ % 4 == 3) {
+				// 	continue;
+				// }
 				byte[] data = tcp.getData();
+				// if (ack > 20 && debugCounter == 0) {
+				// 	debugCounter++;
+				// 	continue;
+				// }
 				if (tcp.checksum == tcp.calulateCheckSum()) {
 					if (tcp.getSequence() == ack) {
 						outputStream.write(data);
 						ack += data.length;
+						packetsReceived++;
+						while (numOutOfOrderSegs > 0) {
+							int i = 0;
+							for (i = 0; i < outOfOrderSegs.length; i++) {
+								if (outOfOrderSegs[i] != null && outOfOrderSegs[i].sequence == ack) {
+									data = outOfOrderSegs[i].getData();
+									outputStream.write(data);
+									packetsReceived++;
+									ack += data.length;
+									numOutOfOrderSegs--;
+									// System.out.println("Got seg from buffer, seq" + outOfOrderSegs[i].sequence);
+									outOfOrderSegs[i] = null;
+									break;
+								}
+							}
+							if (i == outOfOrderSegs.length) {
+								// System.out.println("Whatever this means");
+								break;
+							}
+						}
 					} else {
-						// TODO Check if received ahead of time, can we buffer?
-						System.out.println("OOO");
+						dupAcks++;
+						// System.out.println("OOO");
+						int receivedSeq = tcp.getSequence();
+						if (receivedSeq > ack) {
+							// System.out.println("Checking buffer");
+							int spot = -1;
+							for (int i = 0; i < outOfOrderSegs.length; i++) {
+								if (outOfOrderSegs[i] == null) {
+									spot = i; 
+									continue;
+								} else {
+									if (outOfOrderSegs[i].sequence == receivedSeq) {
+										spot = -1;
+										break; // Already buffered
+									}
+								}
+							}
+							// Add to buffer
+							if (spot != -1) {
+								// System.out.println("Buffering seg");
+								numOutOfOrderSegs++;
+								outOfOrderSegs[spot] = tcp;
+							}
+						} else {
+							dupAcks++;
+							OOOSegs++;
+						}
 					}
 				} else {
-					System.out.println("Bad checksum");
-					tcp.calulateCheckSum();
+					dupAcks++;
+					wrongChecksum++;
+					// System.out.println("Bad checksum");
 				}
 				long time = tcp.time;
-				tcp = new TCP(sequence, ack, null, ACK);
+				tcp = new TCP(1, ack, null, ACK);
 				tcp.time = time;
 				
 				sendPacket(socket, netAddress, tcp); // Send ACK
 			}
 			// FIN
-			sequence++;
-			tcp = new TCP(sequence, ack, null, ACK | FIN);
+			tcp = new TCP(1, ack, null, ACK | FIN);
 			sendPacket(socket, netAddress, tcp);
-			tcp = receivePacket(socket, recPacket);
+			socket.setSoTimeout(200);
+			int transmits = 1;
+			while (transmits < 16) {
+				try {
+					tcp = receivePacket(socket, recPacket);
+					if ((tcp.getFlags() ^ ACK) == 0) {
+						break;
+					} else {
+						tcp = new TCP(1, ack, null, ACK | FIN);
+					}
+				} catch (SocketTimeoutException e) {
+					transmits++;
+					sendPacket(socket, netAddress, tcp);
+				}
+			}
+			
 			socket.close();
 			outputStream.close();
+			System.out.println("Bytes received: " + (ack - 2));
+			System.out.println("Packets Received: " + packetsReceived);
+			System.out.println("Out of order packets discarded: " + OOOSegs);
+			System.out.println("Incorrect checksum packets: " + wrongChecksum);
+			System.out.println("Duplicate Acks: " + dupAcks);
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -298,30 +426,33 @@ public class TCPend {
 		TCP recTCP = new TCP(0, 0, null, 0);
 		recTCP.deserialize(tcpBytes);
 		printPacket(false, recTCP);
-		if (isSender && (recTCP.getFlags() & ACK) == ACK) {
-			if (recTCP.getSequence() == 0) {
-				ERTT = System.nanoTime() - recTCP.time;
-				EDEV = 0.0;
-				timeout = (long)(2.0 * ERTT / 1000000.0);
-			} else {
-				double SRTT = System.nanoTime() - recTCP.time;
-				double SDEV = Math.abs(SRTT - ERTT);
-				ERTT = 0.875 * ERTT + (1 - 0.875) * SRTT;
-				EDEV = 0.75 * EDEV + (1 - 0.75) * SDEV;
-				timeout = (long)(ERTT + 4 * EDEV);
-			}
+		if (isSender && recTCP.getSequence() == 0) {
+			ERTT = System.nanoTime() - recTCP.time;
+			EDEV = 0.0;
+			timeout = (long)(2.0 * ERTT / 1000000.0);
+			// System.out.printf("%d %f %f\n",timeout,ERTT,EDEV);
+		} else if (isSender) {
+			double SRTT = System.nanoTime() - recTCP.time;
+			double SDEV = Math.abs(SRTT - ERTT);
+			ERTT = 0.875 * ERTT + (1 - 0.875) * SRTT;
+			EDEV = 0.75 * EDEV + (1 - 0.75) * SDEV;
+			timeout = (long)((ERTT + 4 * EDEV) / 1000000.0);
+			// System.out.printf("%d %f %f %f %f\n",timeout,SRTT,SDEV,ERTT,EDEV);
+			// System.out.println("TO, SRTT, SDEV, ERTT, EDEV " + timeout + SRTT + SDEV + ERTT + EDEV);
 		}
 		return recTCP;
 		
 	}
 
 	static void sendPacket(DatagramSocket socket, InetAddress address, TCP tcp) throws IOException, InterruptedException {
-		tcp.time = System.nanoTime();
+		if (isSender) {
+			tcp.time = System.nanoTime();
+		}
 		byte[] serial = tcp.serialize();
 		DatagramPacket TCPpacket = new DatagramPacket(serial, serial.length, address, remotePort);
 		socket.send(TCPpacket);
 		printPacket(true, tcp);
-		TimeUnit.MILLISECONDS.sleep(10);
+		// TimeUnit.MILLISECONDS.sleep(10);
 	}
 
 	static void printPacket(Boolean send, TCP tcp) {
@@ -459,10 +590,11 @@ class TCP {
 			if (!TCP.this.acked) {
 				TCP.this.transmits++;
 				if (TCP.this.transmits > 16) {
-					System.out.println("Too many retransmits, exiting");
+					// System.out.println("Too many retransmits, exiting");
 					System.exit(0);
 				} else if (TCP.this.transmits > 1) {
-					System.out.println("Timeout reached, retransmitting");
+					// System.out.println("Timeout reached, retransmitting");
+					TCPend.retransmissions++;
 				}
 				try {
 					TCPend.sendPacket(TCPend.socket, TCPend.netAddress, TCP.this);
@@ -471,6 +603,8 @@ class TCP {
 				} catch (InterruptedException e) {
 	
 				}
+				// System.out.println("Time now " + System.nanoTime());
+				// System.out.println("Timeout here " + TCPend.timeout);
 				TCPend.timer.schedule(new transmitTask(), TCPend.timeout);
 			} else {
 				// this.cancel();

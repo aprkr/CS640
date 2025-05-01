@@ -23,7 +23,7 @@
             "request": "launch",
             "mainClass": "TCPend",
             "projectName": "project2 (4)",
-            "args": "-p 1234 -m 90 -c 1 f tcpreceive.txt"
+            "args": "-p 1234 -m 40 -c 3 f tcpreceive.txt"
         },
         {
             "type": "java",
@@ -31,7 +31,7 @@
             "request": "launch",
             "mainClass": "TCPend",
             "projectName": "project2 (4)",
-            "args": "-p 4567 -s localhost -a 1234 f ../http_server/index.html -m 50 -c 3",
+            "args": "-p 4567 -s localhost -a 1234 f ../http_server/index.html -m 40 -c 1",
             "cwd": "${workspaceFolder}/Assignment4/src"
         }
     ]
