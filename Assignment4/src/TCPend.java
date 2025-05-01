@@ -222,8 +222,8 @@ public class TCPend {
 
 			// Close connection
 			int seq = tcp.getAcknowledge();
-			tcp = new TCP(seq, 1, null, FIN);
-			tcp.schedule();
+			TCP fintcp = new TCP(seq, 1, null, FIN);
+			fintcp.schedule();
 			while (true) {
 				try {
 					tcp = receivePacket(socket, packet);
@@ -231,6 +231,7 @@ public class TCPend {
 				}
 				
 				if ((tcp.getFlags() ^ (FIN | ACK)) == 0) {
+					fintcp.acked = true;
 					tcp = new TCP(seq + 1, 2, null, ACK);
 					sendPacket(socket, netAddress, tcp);
 					break;
@@ -390,7 +391,9 @@ public class TCPend {
 				sendPacket(socket, netAddress, tcp); // Send ACK
 			}
 			// FIN
+			long time = tcp.time;
 			tcp = new TCP(1, ack, null, ACK | FIN);
+			tcp.time = time;
 			sendPacket(socket, netAddress, tcp);
 			socket.setSoTimeout(200);
 			int transmits = 1;
@@ -400,7 +403,9 @@ public class TCPend {
 					if ((tcp.getFlags() ^ ACK) == 0) {
 						break;
 					} else {
+						time = tcp.time;
 						tcp = new TCP(1, ack, null, ACK | FIN);
+						tcp.time = time;
 					}
 				} catch (SocketTimeoutException e) {
 					transmits++;
