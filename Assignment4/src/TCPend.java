@@ -85,7 +85,8 @@ public class TCPend {
 		try {
 			FileInputStream stream = new FileInputStream(file);
 			byte[] fileBuf = stream.readAllBytes();
-			int numSegs = 1 + (fileBuf.length / TCPdataSize);
+			int numSegs = fileBuf.length / TCPdataSize;
+			if ((fileBuf.length % TCPdataSize) > 0) {numSegs++;};
 			segArray = new TCP[numSegs];
 			int curSeg = 0;
 			byte dataBuf[] = new byte[TCPdataSize];
@@ -146,7 +147,7 @@ public class TCPend {
 			// recAck = 1;
 			sendPacket(socket, netAddress, tcp);
 			// int finalAck = segArray[segArray.length - 1].sequence;
-			socket.setSoTimeout(20);
+			socket.setSoTimeout(1);
 			int ackedSegs = 0;
 			while (ackedSegs < segArray.length) { // Send file data
 				// if (retransmits == 0) {
@@ -188,8 +189,10 @@ public class TCPend {
 							if (ackedSeg.doubleAcked) {
 								TCP nextSeg = segArray[ackedSegs + segsAcked];
 								// System.out.println("FastRetrans");
-								nextSeg.schedule();
+								retransmits++;
+								sendPacket(socket, netAddress, nextSeg);
 								// segsInFlight--;
+								ackedSeg.doubleAcked = false;
 							} else {
 								ackedSeg.doubleAcked = true;
 							}
@@ -564,9 +567,9 @@ class TCP {
 		this.sequence = bb.getInt();
 		this.acknowledge = bb.getInt();
 		this.time = bb.getLong();
-		int fourthInt = bb.getInt();
-		this.length = fourthInt >> 3;
-		this.flags = (short)(fourthInt & 0b111);
+		int fifthInt = bb.getInt();
+		this.length = fifthInt >> 3;
+		this.flags = (short)(fifthInt & 0b111);
 		this.checksum = (short)(bb.getInt() & 0xFFFF);
 		this.data = new byte[this.length];
 		System.arraycopy(bytes, HEADER_LENGTH, this.data, 0, this.length);

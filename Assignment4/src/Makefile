@@ -1,5 +1,7 @@
-mtu = 28
-sws = 3
+mtu = 100
+sws = 100
+# sourceFile = tcpreceive.txt
+# destinationFile = tcpreceive2.txt
 sourceFile = ../http_server/index.html
 destinationFile = tcpreceive.txt
 receivePort = 1234
@@ -8,7 +10,7 @@ sendPort = 4567
 default: TCPend.class
 
 rec: TCPend.class
-	java TCPend -p $(receivePort) -m $(mtu) -c $(sws) f tcpreceive.txt
+	java TCPend -p $(receivePort) -m $(mtu) -c $(sws) f $(destinationFile)
 
 send: TCPend.class
 	java TCPend -p $(sendPort) -s localhost -a $(receivePort) f $(sourceFile) -m $(mtu) -c $(sws)
